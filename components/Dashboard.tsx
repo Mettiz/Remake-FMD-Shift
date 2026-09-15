@@ -141,15 +141,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isShiftFilterOpen, setIsShiftFilterOpen] = useState(false);
   
   // --- Date Range Filter State ---
-  const [viewMode, setViewMode] = useState<'MONTH' | 'RANGE'>('MONTH');
+  const [viewMode, setViewMode] = useState<'MONTH' | 'RANGE'>(() => {
+    return publishedRange && publishedRange.isActive ? 'RANGE' : 'MONTH';
+  });
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   
   // Chart Interaction State
   const [activeIndex, setActiveIndex] = useState(0);
   
   // Initialize from current props logic
-  const [fromDate, setFromDate] = useState({ year: String(year), month: '09', day: '01' });
-  const [toDate, setToDate] = useState({ year: String(year), month: '09', day: '30' });
+  const [fromDate, setFromDate] = useState(() => {
+    if (publishedRange && publishedRange.isActive) {
+      return publishedRange.from;
+    }
+    return { year: String(year), month: '09', day: '01' };
+  });
+  const [toDate, setToDate] = useState(() => {
+    if (publishedRange && publishedRange.isActive) {
+      return publishedRange.to;
+    }
+    return { year: String(year), month: '09', day: '30' };
+  });
   
   // The applied filter state (what actually drives the table)
   const [appliedFilter, setAppliedFilter] = useState<{
