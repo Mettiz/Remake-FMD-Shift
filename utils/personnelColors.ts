@@ -31,13 +31,13 @@ export const PERSONNEL_COLOR_PALETTE: string[] = [
 // Dedicated vibrant signature colors for known core staff (guaranteed 0 duplicates & max contrast)
 export const KNOWN_STAFF_COLORS: Record<string, string> = {
   'لسانی': '#2563eb',    // Electric Royal Blue
-  'سامان': '#059669',    // Vibrant Emerald Green
   'سلیمان': '#e11d48',   // Vivid Crimson Rose Red
   'فلاح': '#e11d48',     // Matches Soleiman Fallah
   'دهقان': '#f97316',    // Vivid Sunset Tangerine Orange (sharp & bright)
   'سالاروند': '#7c3aed', // Electric Violet Purple
-  'منصوری': '#0891b2',   // Sharp Ocean Cyan
-  'گودرزی': '#d946ef',   // Electric Fuchsia Magenta
+  'سپهر': '#059669',     // Vibrant Emerald Green
+  'حیدری': '#0891b2',    // Sharp Ocean Cyan
+  'رحیمی': '#d97706',    // Vibrant Golden Amber
 };
 
 // Legacy dull/faded colors to migrate away from
