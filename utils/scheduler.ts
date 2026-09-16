@@ -3,18 +3,10 @@
  * Shift Scheduler & Generation Engine - v1.0.1
  */
 import { ShiftEntry, SHIFT_WEIGHTS, Personnel } from '../types';
-import { OFFICIAL_HOLIDAYS } from '../constants';
+import { OFFICIAL_HOLIDAYS, INITIAL_PERSONNEL } from '../constants';
 import { getDayNameForJalali } from './persianDate';
 
-export const INITIAL_STAFF: Personnel[] = [
-  { name: 'مهندس سلیمان فلاح', roles: ['Shift'], isActive: true, color: '#e11d48' },
-  { name: 'مهندس دهقان', roles: ['Shift'], isActive: true, color: '#f97316' },
-  { name: 'مهندس سالاروند', roles: ['Shift'], isActive: true, color: '#7c3aed' },
-  { name: 'مهندس سپهر آرا', roles: ['Shift'], isActive: true, color: '#059669' },
-  { name: 'مهندس حیدری', roles: ['Shift'], isActive: true, color: '#0891b2' },
-  { name: 'آقای رحیمی', roles: ['Shift'], isActive: true, color: '#d97706' },
-  { name: 'مهندس لسانی', roles: ['Supervisor'], isActive: true, color: '#2563eb' },
-];
+export const INITIAL_STAFF: Personnel[] = INITIAL_PERSONNEL;
 
 const WEEK_DAYS = ['شنبه', 'یک‌شنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنج‌شنبه', 'جمعه'];
 
@@ -62,18 +54,24 @@ export const generateNextMonth = (
 
   fullScheduleHistory.forEach(entry => {
     // Check Day Shift
-    const dayPerson = stats.find(s => s.name === entry.dayShiftPerson);
-    if (dayPerson) {
-      dayPerson.dayCount++;
-      dayPerson.weightedScore += SHIFT_WEIGHTS.dayHours;
-    }
+    const dayPersons = [entry.dayShiftPerson, ...(entry.extraDayPersons || [])];
+    dayPersons.forEach(dp => {
+      const p = stats.find(s => s.name === dp);
+      if (p) {
+        p.dayCount++;
+        p.weightedScore += SHIFT_WEIGHTS.dayHours;
+      }
+    });
 
     // Check Night Shift
-    const nightPerson = stats.find(s => s.name === entry.nightShiftPerson);
-    if (nightPerson) {
-      nightPerson.nightCount++;
-      nightPerson.weightedScore += (SHIFT_WEIGHTS.nightHours * SHIFT_WEIGHTS.nightMultiplier);
-    }
+    const nightPersons = [entry.nightShiftPerson, ...(entry.extraNightPersons || [])];
+    nightPersons.forEach(np => {
+      const p = stats.find(s => s.name === np);
+      if (p) {
+        p.nightCount++;
+        p.weightedScore += (SHIFT_WEIGHTS.nightHours * SHIFT_WEIGHTS.nightMultiplier);
+      }
+    });
   });
 
   // --- Start Generation ---
@@ -181,30 +179,35 @@ export const validateSwap = (
   const prevEntry = entryIndex > 0 ? schedule[entryIndex - 1] : null;
   const nextEntry = entryIndex < schedule.length - 1 ? schedule[entryIndex + 1] : null;
 
+  const currentNightPersons = [currentEntry.nightShiftPerson, ...(currentEntry.extraNightPersons || [])];
+  const currentDayPersons = [currentEntry.dayShiftPerson, ...(currentEntry.extraDayPersons || [])];
+  const prevNightPersons = prevEntry ? [prevEntry.nightShiftPerson, ...(prevEntry.extraNightPersons || [])] : [];
+  const nextDayPersons = nextEntry ? [nextEntry.dayShiftPerson, ...(nextEntry.extraDayPersons || [])] : [];
+
   if (shiftType === 'Day') {
     // Target takes Day Shift
     
     // 1. Cannot work Day if working Night same day (Double shift)
-    if (currentEntry.nightShiftPerson === targetPerson) {
+    if (currentNightPersons.includes(targetPerson)) {
       return { valid: false, reason: 'این شخص در همین روز شیفت شب دارد.' };
     }
     // 2. Cannot work Day if worked Night previous day (Need Rest)
-    if (prevEntry && prevEntry.nightShiftPerson === targetPerson) {
+    if (prevNightPersons.includes(targetPerson)) {
       return { valid: false, reason: 'این شخص روز قبل شیفت شب بوده و نیاز به استراحت دارد.' };
     }
   } else {
     // Target takes Night Shift
     
     // 1. Cannot work Night if working Day same day (Double shift)
-    if (currentEntry.dayShiftPerson === targetPerson) {
+    if (currentDayPersons.includes(targetPerson)) {
       return { valid: false, reason: 'این شخص در همین روز شیفت روز دارد.' };
     }
     // 2. Cannot work Night if worked Night previous day (Back-to-back night constraint from generator)
-    if (prevEntry && prevEntry.nightShiftPerson === targetPerson) {
+    if (prevNightPersons.includes(targetPerson)) {
       return { valid: false, reason: 'این شخص شب قبل شیفت بوده است (توالی شب‌کاری).' };
     }
     // 3. Cannot work Night if working Day next day (Need Rest after night)
-    if (nextEntry && nextEntry.dayShiftPerson === targetPerson) {
+    if (nextDayPersons.includes(targetPerson)) {
        return { valid: false, reason: 'این شخص فردا شیفت روز دارد و نمی‌تواند امشب شیفت بایستد.' };
     }
   }

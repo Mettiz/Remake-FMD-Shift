@@ -24,6 +24,9 @@ export interface ShiftEntry {
   // New fields to track history of swaps
   originalDayShiftPerson?: PersonName;
   originalNightShiftPerson?: PersonName;
+  // Multi-person support: additional persons for Day or Night shift (2nd, 3rd, etc.)
+  extraDayPersons?: PersonName[];
+  extraNightPersons?: PersonName[];
 }
 
 export interface StatEntry {
@@ -68,6 +71,10 @@ export interface DashboardProps {
   onUpdateShift: (id: number, type: 'dayShiftPerson' | 'nightShiftPerson' | 'onCallPerson', newPerson: string) => void;
   onToggleHoliday: (id: number) => void;
   onOpenReport: () => void;
+  // Multi-person shift management
+  onAddExtraPerson?: (id: number, shiftType: 'Day' | 'Night', personName: string) => void;
+  onRemoveExtraPerson?: (id: number, shiftType: 'Day' | 'Night', personName: string) => void;
+  onReplaceExtraPerson?: (id: number, shiftType: 'Day' | 'Night', oldPerson: string, newPerson: string) => void;
   // Locking props
   isLocked: boolean;
   onToggleLock: () => void;

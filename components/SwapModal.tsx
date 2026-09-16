@@ -46,8 +46,8 @@ export const SwapModal: React.FC<SwapModalProps> = ({
 
   // Filter schedule to days where current user works
   const myShifts = schedule.filter(s => 
-    (selectedShift === 'Day' && s.dayShiftPerson === currentUser) || 
-    (selectedShift === 'Night' && s.nightShiftPerson === currentUser)
+    (selectedShift === 'Day' && (s.dayShiftPerson === currentUser || (s.extraDayPersons && s.extraDayPersons.includes(currentUser)))) || 
+    (selectedShift === 'Night' && (s.nightShiftPerson === currentUser || (s.extraNightPersons && s.extraNightPersons.includes(currentUser))))
   );
 
   return (

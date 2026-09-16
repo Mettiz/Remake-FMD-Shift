@@ -7,13 +7,14 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { PersonalReportModal } from './components/PersonalReportModal';
 import { DataManagement } from './components/DataManagement';
-import { SCHEDULE_DATA } from './constants';
+import { SCHEDULE_DATA, INITIAL_PERSONNEL } from './constants';
 import { INITIAL_STAFF, generateNextMonth, getDaysInPersianMonth, validateSwap } from './utils/scheduler';
 import { ShiftEntry, Personnel, AppData, PublishedRange } from './types';
-import { Settings, Plus, Trash2, Save, ArrowUp, ArrowDown, UserCog, Users, ArrowRightLeft, AlertCircle, AlertTriangle, CheckCircle2, Edit, Calendar as CalendarIcon, List, Table as TableIcon, Check, Lock, X, KeyRound, CalendarPlus, Crown, LogOut, ShieldCheck, Palette, Cloud, CloudUpload, Wifi, RefreshCw } from 'lucide-react';
-import { getTodayPersianParts, getDayNameForJalali } from './utils/persianDate';
+import { Settings, Plus, Trash2, Save, ArrowUp, ArrowDown, UserCog, Users, ArrowRightLeft, AlertCircle, AlertTriangle, CheckCircle2, Edit, Calendar as CalendarIcon, List, Table as TableIcon, Check, Lock, X, KeyRound, CalendarPlus, Crown, LogOut, ShieldCheck, Palette, Cloud, CloudUpload, Wifi, RefreshCw, UserPlus, Sun, Moon, Sparkles } from 'lucide-react';
+import { getTodayPersianParts, getDayNameForJalali, toPersianDigits } from './utils/persianDate';
 import { getNextPersonnelColor, getPersonColor, ensureUniquePersonnelColors, upgradeToVibrantPersonnel } from './utils/personnelColors';
 import { subscribeToCloudRoster, saveCloudRoster, resetCloudRoster } from './utils/firebase';
+import { unifyPersonnelAndShifts } from './utils/customFormatHandler';
 
 const MONTHS = [
     { name: 'فروردین', code: '01' },
@@ -49,15 +50,12 @@ const App: React.FC = () => {
       const saved = localStorage.getItem(STORAGE_KEYS.SCHEDULE);
       let list: ShiftEntry[] = saved ? JSON.parse(saved) : SCHEDULE_DATA;
 
-      // Ensure current year/month entries from SCHEDULE_DATA are available
-      const currentToday = getTodayPersianParts();
-      const currentPrefix = `${currentToday.year}/${currentToday.month}/`;
-      const hasCurrentMonth = list.some(s => s.date.startsWith(currentPrefix));
-      if (!hasCurrentMonth) {
-        const todayEntries = SCHEDULE_DATA.filter(s => s.date.startsWith(currentPrefix));
-        if (todayEntries.length > 0) {
-          list = [...list, ...todayEntries];
-        }
+      // Filter out all 1404 entries
+      list = list.filter(s => !s.date.startsWith('1404'));
+
+      // If empty after 1404 purge, fallback to clean SCHEDULE_DATA
+      if (list.length === 0) {
+        list = SCHEDULE_DATA;
       }
 
       // Always guarantee each entry's dayName is strictly mathematically accurate for the Iranian calendar
@@ -87,15 +85,13 @@ const App: React.FC = () => {
   const [personnelList, setPersonnelList] = useState<Personnel[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.PERSONNEL);
-      const list: Personnel[] = saved ? JSON.parse(saved) : INITIAL_STAFF;
-      const { updated, hasChanges } = upgradeToVibrantPersonnel(list);
-      if (hasChanges) {
-        localStorage.setItem(STORAGE_KEYS.PERSONNEL, JSON.stringify(updated));
-      }
-      return updated;
+      const list: Personnel[] = saved ? JSON.parse(saved) : INITIAL_PERSONNEL;
+      const { updated } = upgradeToVibrantPersonnel(list);
+      const { unifiedPersonnel } = unifyPersonnelAndShifts([], updated, []);
+      return unifiedPersonnel;
     } catch (error) {
       console.error("Failed to load personnel from storage", error);
-      return INITIAL_STAFF;
+      return INITIAL_PERSONNEL;
     }
   });
 
@@ -244,18 +240,34 @@ const App: React.FC = () => {
         isRemoteUpdateRef.current = true;
 
         if (cloudData.schedule && Array.isArray(cloudData.schedule) && cloudData.schedule.length > 0) {
-          setSchedule(cloudData.schedule);
+          const non1404 = cloudData.schedule.filter(s => !s.date.startsWith('1404'));
+          const cleanSchedule = non1404.length > 0 ? non1404 : SCHEDULE_DATA;
+          const had1404 = cloudData.schedule.some(s => s.date.startsWith('1404'));
+
+          const cloudPersonnel = (cloudData.personnelList && Array.isArray(cloudData.personnelList) && cloudData.personnelList.length > 0) 
+            ? cloudData.personnelList 
+            : personnelList;
+          const { updated } = upgradeToVibrantPersonnel(cloudPersonnel);
+          const { unifiedShifts, unifiedPersonnel } = unifyPersonnelAndShifts(cleanSchedule, updated, updated);
+          setSchedule(unifiedShifts);
+          setPersonnelList(unifiedPersonnel);
           try {
-            localStorage.setItem(STORAGE_KEYS.SCHEDULE, JSON.stringify(cloudData.schedule));
+            localStorage.setItem(STORAGE_KEYS.SCHEDULE, JSON.stringify(unifiedShifts));
+            localStorage.setItem(STORAGE_KEYS.PERSONNEL, JSON.stringify(unifiedPersonnel));
           } catch (e) {
             console.error('LocalStorage error', e);
           }
-        }
-        if (cloudData.personnelList && Array.isArray(cloudData.personnelList) && cloudData.personnelList.length > 0) {
+
+          // If cloud data contained 1404 entries, immediately purge them from Firestore
+          if (had1404) {
+            saveCloudRoster({ schedule: unifiedShifts }).catch(console.error);
+          }
+        } else if (cloudData.personnelList && Array.isArray(cloudData.personnelList) && cloudData.personnelList.length > 0) {
           const { updated } = upgradeToVibrantPersonnel(cloudData.personnelList);
-          setPersonnelList(updated);
+          const { unifiedPersonnel } = unifyPersonnelAndShifts([], updated, []);
+          setPersonnelList(unifiedPersonnel);
           try {
-            localStorage.setItem(STORAGE_KEYS.PERSONNEL, JSON.stringify(updated));
+            localStorage.setItem(STORAGE_KEYS.PERSONNEL, JSON.stringify(unifiedPersonnel));
           } catch (e) {
             console.error('LocalStorage error', e);
           }
@@ -524,11 +536,90 @@ const App: React.FC = () => {
   // Helpers
   const shiftWorkers = personnelList.filter(p => p.isActive && p.roles.includes('Shift')).map(p => p.name);
   const supervisors = personnelList.filter(p => p.isActive && p.roles.includes('Supervisor')).map(p => p.name);
+  // All eligible personnel who can be placed in day or night shifts (including supervisors)
+  const allEligibleShiftWorkers = useMemo(() => {
+    return Array.from(new Set([...shiftWorkers, ...supervisors]));
+  }, [shiftWorkers, supervisors]);
 
   // Available months across schedule
   const availableMonths = useMemo(() => {
     return Array.from(new Set(schedule.map(s => s.date.substring(0, 7)))).sort();
   }, [schedule]);
+
+  // Staged Preview Mode (Load button applies to dashboard in preview mode before saving)
+  const [isStagingPreview, setIsStagingPreview] = useState(false);
+  const [stagingMeta, setStagingMeta] = useState<{ source: string; rangeText?: string } | null>(null);
+  const [backupBeforeStaging, setBackupBeforeStaging] = useState<{
+    schedule: ShiftEntry[];
+    personnel: Personnel[];
+    unlockedMonths: string[];
+    publishedRange: PublishedRange | null;
+  } | null>(null);
+
+  const handleStagePreview = (data: AppData, meta?: { source: string; rangeText?: string }) => {
+    // Take snapshot of current state before staging
+    setBackupBeforeStaging({
+      schedule,
+      personnel: personnelList,
+      unlockedMonths,
+      publishedRange
+    });
+
+    setIsStagingPreview(true);
+    setStagingMeta(meta || { source: 'فایل ورودی' });
+
+    const rawSched = data.schedule || schedule;
+    const non1404 = rawSched.filter(s => !s.date.startsWith('1404'));
+    const { unifiedShifts } = unifyPersonnelAndShifts(non1404, [], personnelList);
+
+    if (unifiedShifts.length > 0) {
+      setSchedule(unifiedShifts);
+
+      // Auto-set the date range to match the loaded schedule
+      const sortedDates = [...unifiedShifts].sort((a, b) => a.date.localeCompare(b.date));
+      const firstDate = sortedDates[0].date.split('/');
+      const lastDate = sortedDates[sortedDates.length - 1].date.split('/');
+
+      const newRange: PublishedRange = {
+        isActive: true,
+        from: { year: firstDate[0], month: firstDate[1], day: firstDate[2] },
+        to: { year: lastDate[0], month: lastDate[1], day: lastDate[2] }
+      };
+
+      setPublishedRange(newRange);
+
+      const yNum = parseInt(firstDate[0], 10);
+      const mIdx = MONTHS.findIndex(mObj => mObj.code === firstDate[1]);
+      if (yNum) setCurrentYear(yNum);
+      if (mIdx !== -1) setMonthIndex(mIdx);
+    }
+
+    setActiveTab('dashboard');
+  };
+
+  const handleSaveStagingFinal = async () => {
+    setIsStagingPreview(false);
+    setStagingMeta(null);
+    setBackupBeforeStaging(null);
+    await handleManualSaveChanges();
+  };
+
+  const handleCancelStaging = () => {
+    if (backupBeforeStaging) {
+      setSchedule(backupBeforeStaging.schedule);
+      setPersonnelList(backupBeforeStaging.personnel);
+      setUnlockedMonths(backupBeforeStaging.unlockedMonths);
+      setPublishedRange(backupBeforeStaging.publishedRange);
+    }
+    setIsStagingPreview(false);
+    setStagingMeta(null);
+    setBackupBeforeStaging(null);
+    setSaveNotice({
+      type: 'success',
+      message: 'پیش‌نمایش لغو شد و اطلاعات به حالت قبلی بازگشت.'
+    });
+    setTimeout(() => setSaveNotice(null), 4000);
+  };
 
 
 
@@ -651,6 +742,12 @@ const App: React.FC = () => {
       }
       if (item.nightShiftPerson === name) {
         item.nightShiftPerson = remainingShiftWorkers.length > 0 ? remainingShiftWorkers[0] : 'نامشخص';
+      }
+      if (item.extraDayPersons && item.extraDayPersons.includes(name)) {
+        item.extraDayPersons = item.extraDayPersons.filter(p => p !== name);
+      }
+      if (item.extraNightPersons && item.extraNightPersons.includes(name)) {
+        item.extraNightPersons = item.extraNightPersons.filter(p => p !== name);
       }
       return item;
     }));
@@ -827,6 +924,61 @@ const App: React.FC = () => {
     ));
   };
 
+  const handleAddExtraPerson = (id: number, shiftType: 'Day' | 'Night', personName: string) => {
+    if (!personName) return;
+    setSchedule(prev => prev.map(item => {
+      if (item.id === id) {
+        if (shiftType === 'Day') {
+          const currentExtras = item.extraDayPersons || [];
+          if (currentExtras.includes(personName) || item.dayShiftPerson === personName) {
+            return item;
+          }
+          return { ...item, extraDayPersons: [...currentExtras, personName] };
+        } else {
+          const currentExtras = item.extraNightPersons || [];
+          if (currentExtras.includes(personName) || item.nightShiftPerson === personName) {
+            return item;
+          }
+          return { ...item, extraNightPersons: [...currentExtras, personName] };
+        }
+      }
+      return item;
+    }));
+  };
+
+  const handleRemoveExtraPerson = (id: number, shiftType: 'Day' | 'Night', personName: string) => {
+    setSchedule(prev => prev.map(item => {
+      if (item.id === id) {
+        if (shiftType === 'Day') {
+          const currentExtras = item.extraDayPersons || [];
+          return { ...item, extraDayPersons: currentExtras.filter(p => p !== personName) };
+        } else {
+          const currentExtras = item.extraNightPersons || [];
+          return { ...item, extraNightPersons: currentExtras.filter(p => p !== personName) };
+        }
+      }
+      return item;
+    }));
+  };
+
+  const handleReplaceExtraPerson = (id: number, shiftType: 'Day' | 'Night', oldPerson: string, newPerson: string) => {
+    if (!newPerson) return;
+    setSchedule(prev => prev.map(item => {
+      if (item.id === id) {
+        if (shiftType === 'Day') {
+          const currentExtras = item.extraDayPersons || [];
+          const updated = currentExtras.map(p => p === oldPerson ? newPerson : p);
+          return { ...item, extraDayPersons: updated };
+        } else {
+          const currentExtras = item.extraNightPersons || [];
+          const updated = currentExtras.map(p => p === oldPerson ? newPerson : p);
+          return { ...item, extraNightPersons: updated };
+        }
+      }
+      return item;
+    }));
+  };
+
   const handleToggleHoliday = (id: number) => {
     setSchedule(prev => prev.map(item => 
       item.id === id ? { ...item, isHoliday: !item.isHoliday } : item
@@ -870,8 +1022,11 @@ const App: React.FC = () => {
   };
   
   const handleImport = (data: AppData) => {
-      if (data.schedule) setSchedule(data.schedule);
-      if (data.personnel) setPersonnelList(data.personnel);
+      const rawSched = data.schedule || schedule;
+      const non1404 = rawSched.filter(s => !s.date.startsWith('1404'));
+      const { unifiedShifts } = unifyPersonnelAndShifts(non1404, [], personnelList);
+
+      if (data.schedule) setSchedule(unifiedShifts);
       if (data.lockedMonths) setUnlockedMonths(data.lockedMonths);
       if (data.publishedRange !== undefined) {
         handleSavePublishedRange(data.publishedRange);
@@ -1105,6 +1260,42 @@ const App: React.FC = () => {
         </div>
       </nav>
 
+      {/* Staged Preview Sticky Banner */}
+      {isStagingPreview && (
+        <div className="bg-amber-500 text-slate-900 border-b-2 border-amber-600 px-4 py-2.5 sticky top-14 sm:top-16 z-40 shadow-md animate-in fade-in slide-in-from-top-2 no-print">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
+            <div className="flex items-center gap-2 font-bold text-right">
+              <span className="flex h-2.5 w-2.5 relative shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white"></span>
+              </span>
+              <span>
+                پیش‌نمایش موقت ورودی: <b>{stagingMeta?.source || 'فایل ورودی'}</b> {stagingMeta?.rangeText ? `(${stagingMeta.rangeText})` : ''} — این تغییرات در داشبورد شما بارگذاری شده اما هنوز ذخیره نهایی نشده است.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleSaveStagingFinal}
+                disabled={isSavingChanges}
+                className="bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white font-black px-3.5 py-1.5 rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Save size={14} className="shrink-0" />
+                <span>{isSavingChanges ? 'در حال ذخیره...' : 'ذخیره و انتشار نهایی'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelStaging}
+                className="bg-amber-800 hover:bg-amber-900 text-white font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1 cursor-pointer whitespace-nowrap"
+              >
+                <X size={14} className="shrink-0" />
+                <span>انصراف</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <main className="main-content max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         {activeTab === 'dashboard' ? (
@@ -1121,6 +1312,9 @@ const App: React.FC = () => {
             onUpdateShift={handleUpdateShift}
             onToggleHoliday={handleToggleHoliday}
             onOpenReport={() => setIsReportModalOpen(true)}
+            onAddExtraPerson={handleAddExtraPerson}
+            onRemoveExtraPerson={handleRemoveExtraPerson}
+            onReplaceExtraPerson={handleReplaceExtraPerson}
             isLocked={isCurrentMonthLocked}
             onToggleLock={handleToggleLock}
             onRegenerate={handleRegenerate}
@@ -1501,7 +1695,7 @@ const App: React.FC = () => {
                             <Edit className="text-blue-500" size={20} />
                             مدیریت و ویرایش شیفت‌ها
                         </h2>
-                        <span className="text-xs bg-white border px-2 py-1 rounded text-slate-500">ویرایش دستی</span>
+                        <span className="text-xs bg-white border px-2 py-1 rounded text-slate-500 font-medium">جابجایی، ویرایش و شیفت‌های چندنفره</span>
                     </div>
                     
                     <div className="p-6 space-y-8">
@@ -1509,22 +1703,52 @@ const App: React.FC = () => {
                         <div className="space-y-4">
                             <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2 border-b pb-2">
                                 <CalendarIcon size={16} />
-                                جابجایی شیفت
+                                مدیریت و تنظیمات روزانه شیفت‌ها (جابجایی، سرپرست و نفرات کمکی)
                             </h3>
                             <div>
                                 <label className="block text-xs font-medium text-slate-500 mb-1">انتخاب تاریخ</label>
                                 <div className="flex items-center gap-2">
                                     <select 
-                                        className="w-full bg-white text-slate-900 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                        className="w-full bg-white text-slate-900 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-bold"
                                         value={swapTool.date}
                                         onChange={(e) => updateSwapTool({date: e.target.value, targetPerson: '', supervisorTarget: ''})}
                                     >
                                         <option value="">انتخاب کنید...</option>
-                                        {currentMonthData.map(s => (
-                                            <option key={s.id} value={s.date}>{s.dayName} - {s.date}</option>
-                                        ))}
+                                        {currentMonthData.map(s => {
+                                            const totalExtras = (s.extraDayPersons?.length || 0) + (s.extraNightPersons?.length || 0);
+                                            return (
+                                                <option key={s.id} value={s.date}>
+                                                    {s.dayName} - {toPersianDigits(s.date)} {totalExtras > 0 ? `⭐ [چندنفره: ${toPersianDigits(totalExtras + 2)} نفر]` : ''}
+                                                </option>
+                                            );
+                                        })}
                                     </select>
                                 </div>
+                                {currentMonthData.filter(s => (s.extraDayPersons?.length || 0) + (s.extraNightPersons?.length || 0) > 0).length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-2 border-t border-slate-100">
+                                        <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
+                                            <Users size={12} className="text-indigo-600" />
+                                            <span>روزهای دارای شیفت چندنفره در این ماه:</span>
+                                        </span>
+                                        {currentMonthData.filter(s => (s.extraDayPersons?.length || 0) + (s.extraNightPersons?.length || 0) > 0).map(d => (
+                                            <button
+                                                key={d.id}
+                                                type="button"
+                                                onClick={() => updateSwapTool({date: d.date, targetPerson: '', supervisorTarget: ''})}
+                                                className={`text-[11px] font-bold px-2 py-0.5 rounded border transition cursor-pointer flex items-center gap-1 ${
+                                                    swapTool.date === d.date
+                                                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                                                        : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                                                }`}
+                                            >
+                                                <span>{toPersianDigits(d.date.split('/').slice(1).join('/'))}</span>
+                                                <span className="text-[9px] opacity-85 font-black">
+                                                    ({toPersianDigits((d.extraDayPersons?.length || 0) + (d.extraNightPersons?.length || 0) + 2)}نفر)
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {swapTool.date && currentSwapEntry && (
@@ -1557,7 +1781,7 @@ const App: React.FC = () => {
                                                     <span>شخص فعلی:</span>
                                                     <span className="font-bold">{swapTool.shiftType === 'Day' ? currentSwapEntry.dayShiftPerson : currentSwapEntry.nightShiftPerson}</span>
                                                 </div>
-                                                <div className="flex items-center gap-2">
+                                                 <div className="flex items-center gap-2">
                                                     <span className="whitespace-nowrap">جایگزین:</span>
                                                     <select 
                                                         className="w-full bg-white text-slate-900 border border-slate-300 rounded-md px-2 py-1 focus:ring-1 focus:ring-blue-500 outline-none"
@@ -1565,7 +1789,7 @@ const App: React.FC = () => {
                                                         onChange={(e) => updateSwapTool({targetPerson: e.target.value})}
                                                     >
                                                         <option value="">انتخاب...</option>
-                                                        {shiftWorkers.map(name => (
+                                                        {allEligibleShiftWorkers.map(name => (
                                                             <option key={name} value={name}>{name}</option>
                                                         ))}
                                                     </select>
@@ -1653,6 +1877,155 @@ const App: React.FC = () => {
                                             </div>
                                         </div>
                                     </div>
+
+                                    {/* 3.3 Multi-person Shift Assignment (2-person or 3-person shifts) */}
+                                    <div className="pt-5 border-t border-slate-200">
+                                        <div className="bg-gradient-to-r from-orange-50/70 via-white to-indigo-50/70 p-4 rounded-xl border border-slate-200">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                                                        <UserPlus size={18} />
+                                                    </div>
+                                                    <div>
+                                                        <h4 className="font-bold text-slate-800 text-sm">تنظیم شیفت چندنفره (۲ یا ۳ نفره)</h4>
+                                                        <p className="text-[11px] text-slate-500">افزودن یا حذف نفر دوم و سوم برای شیفت روز یا شب در تاریخ {currentSwapEntry.date}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                                {/* Day shift multi-person */}
+                                                <div className="bg-white p-3 rounded-lg border border-orange-200/80 shadow-2xs space-y-2.5">
+                                                    <div className="flex items-center justify-between border-b border-orange-100 pb-2">
+                                                        <span className="text-xs font-bold text-orange-950 flex items-center gap-1.5">
+                                                            <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                            شیفت روز:
+                                                        </span>
+                                                        <span className="text-xs font-black text-orange-900 bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
+                                                            اصلی: {currentSwapEntry.dayShiftPerson}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Extra day members */}
+                                                    <div className="space-y-1.5 min-h-[32px]">
+                                                        {currentSwapEntry.extraDayPersons && currentSwapEntry.extraDayPersons.length > 0 ? (
+                                                            currentSwapEntry.extraDayPersons.map((extraPerson, extraIdx) => (
+                                                                <div key={extraIdx} className="flex items-center justify-between bg-orange-50/80 border border-orange-200 px-2 py-1 rounded text-xs">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <span className="font-bold text-orange-950">{extraPerson}</span>
+                                                                        <span className="text-[10px] text-orange-700 bg-orange-200/70 px-1.5 rounded-full font-black">
+                                                                            {extraIdx === 0 ? 'نفر دوم' : 'نفر سوم'}
+                                                                        </span>
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={() => handleRemoveExtraPerson(currentSwapEntry.id, 'Day', extraPerson)}
+                                                                        className="text-red-500 hover:text-red-700 p-0.5 rounded hover:bg-red-50 transition"
+                                                                        title="حذف از شیفت"
+                                                                    >
+                                                                        <X size={14} />
+                                                                    </button>
+                                                                </div>
+                                                            ))
+                                                        ) : (
+                                                            <p className="text-[11px] text-slate-400 italic py-1 text-center">در حال حاضر تک‌نفره است.</p>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Add extra person select */}
+                                                    {(!currentSwapEntry.extraDayPersons || currentSwapEntry.extraDayPersons.length < 2) && (
+                                                        <div className="pt-1.5 border-t border-slate-100">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <select 
+                                                                    id="select-add-extra-day"
+                                                                    className="flex-1 bg-white text-slate-900 border border-slate-300 rounded-md px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-orange-400"
+                                                                    defaultValue=""
+                                                                    onChange={(e) => {
+                                                                        if (e.target.value) {
+                                                                            handleAddExtraPerson(currentSwapEntry.id, 'Day', e.target.value);
+                                                                            e.target.value = "";
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    <option value="" disabled>+ افزودن نفر کمکی به روز...</option>
+                                                                    {allEligibleShiftWorkers
+                                                                        .filter(p => p !== currentSwapEntry.dayShiftPerson && !(currentSwapEntry.extraDayPersons || []).includes(p))
+                                                                        .map(p => (
+                                                                            <option key={p} value={p}>{p}</option>
+                                                                        ))
+                                                                    }
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Night shift multi-person */}
+                                                <div className="bg-white p-3 rounded-lg border border-indigo-200/80 shadow-2xs space-y-2.5">
+                                                    <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
+                                                        <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                                                            <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                                                            شیفت شب:
+                                                        </span>
+                                                        <span className="text-xs font-black text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                                                            اصلی: {currentSwapEntry.nightShiftPerson}
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Extra night members */}
+                                                    <div className="space-y-1.5 min-h-[32px]">
+                                                        {currentSwapEntry.extraNightPersons && currentSwapEntry.extraNightPersons.length > 0 ? (
+                                                            currentSwapEntry.extraNightPersons.map((extraPerson, extraIdx) => (
+                                                                <div key={extraIdx} className="flex items-center justify-between bg-indigo-50/80 border border-indigo-200 px-2 py-1 rounded text-xs">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <span className="font-bold text-indigo-950">{extraPerson}</span>
+                                                                        <span className="text-[10px] text-indigo-700 bg-indigo-200/70 px-1.5 rounded-full font-black">
+                                                                            {extraIdx === 0 ? 'نفر دوم' : 'نفر سوم'}
+                                                                        </span>
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={() => handleRemoveExtraPerson(currentSwapEntry.id, 'Night', extraPerson)}
+                                                                        className="text-red-500 hover:text-red-700 p-0.5 rounded hover:bg-red-50 transition"
+                                                                        title="حذف از شیفت"
+                                                                    >
+                                                                        <X size={14} />
+                                                                    </button>
+                                                                </div>
+                                                            ))
+                                                        ) : (
+                                                            <p className="text-[11px] text-slate-400 italic py-1 text-center">در حال حاضر تک‌نفره است.</p>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Add extra person select */}
+                                                    {(!currentSwapEntry.extraNightPersons || currentSwapEntry.extraNightPersons.length < 2) && (
+                                                        <div className="pt-1.5 border-t border-slate-100">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <select 
+                                                                    id="select-add-extra-night"
+                                                                    className="flex-1 bg-white text-slate-900 border border-slate-300 rounded-md px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-400"
+                                                                    defaultValue=""
+                                                                    onChange={(e) => {
+                                                                        if (e.target.value) {
+                                                                            handleAddExtraPerson(currentSwapEntry.id, 'Night', e.target.value);
+                                                                            e.target.value = "";
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    <option value="" disabled>+ افزودن نفر کمکی به شب...</option>
+                                                                    {allEligibleShiftWorkers
+                                                                        .filter(p => p !== currentSwapEntry.nightShiftPerson && !(currentSwapEntry.extraNightPersons || []).includes(p))
+                                                                        .map(p => (
+                                                                            <option key={p} value={p}>{p}</option>
+                                                                        ))
+                                                                    }
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                     {swapMessage && (
                                         <div className={`p-3 rounded-lg text-sm flex items-center gap-2 ${swapMessage.type === 'error' ? 'bg-red-50 text-red-700' : (swapMessage.type === 'info' ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700')}`}>
                                             {swapMessage.type === 'error' ? <AlertCircle size={18} /> : (swapMessage.type === 'info' ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />)}
@@ -1703,22 +2076,50 @@ const App: React.FC = () => {
                                                     </td>
                                                     <td className="p-2 font-mono text-slate-500">{entry.date}</td>
                                                     <td className="p-1">
-                                                        <select 
-                                                            className="w-full p-1 bg-white text-slate-900 border border-slate-200 rounded focus:border-amber-400 outline-none"
-                                                            value={entry.dayShiftPerson}
-                                                            onChange={(e) => handleUpdateShift(entry.id, 'dayShiftPerson', e.target.value)}
-                                                        >
-                                                            {shiftWorkers.map(s => <option key={s} value={s}>{s}</option>)}
-                                                        </select>
+                                                        <div className="space-y-1">
+                                                            <select 
+                                                                className="w-full p-1 bg-white text-slate-900 border border-slate-200 rounded focus:border-amber-400 outline-none text-xs"
+                                                                value={entry.dayShiftPerson}
+                                                                onChange={(e) => handleUpdateShift(entry.id, 'dayShiftPerson', e.target.value)}
+                                                            >
+                                                                {allEligibleShiftWorkers.map(s => <option key={s} value={s}>{s}</option>)}
+                                                            </select>
+                                                            {entry.extraDayPersons && entry.extraDayPersons.map((extra, idx) => (
+                                                                <div key={idx} className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5 text-[10px]">
+                                                                    <span className="font-bold text-orange-900 truncate">{extra} ({idx === 0 ? 'نفر ۲' : 'نفر ۳'})</span>
+                                                                    <button
+                                                                        onClick={() => handleRemoveExtraPerson(entry.id, 'Day', extra)}
+                                                                        className="text-red-500 hover:text-red-700 ml-1"
+                                                                        title="حذف"
+                                                                    >
+                                                                        ×
+                                                                    </button>
+                                                                </div>
+                                                            ))}
+                                                        </div>
                                                     </td>
                                                     <td className="p-1">
-                                                        <select 
-                                                            className="w-full p-1 bg-white text-slate-900 border border-slate-200 rounded focus:border-indigo-400 outline-none"
-                                                            value={entry.nightShiftPerson}
-                                                            onChange={(e) => handleUpdateShift(entry.id, 'nightShiftPerson', e.target.value)}
-                                                        >
-                                                            {shiftWorkers.map(s => <option key={s} value={s}>{s}</option>)}
-                                                        </select>
+                                                        <div className="space-y-1">
+                                                            <select 
+                                                                className="w-full p-1 bg-white text-slate-900 border border-slate-200 rounded focus:border-indigo-400 outline-none text-xs"
+                                                                value={entry.nightShiftPerson}
+                                                                onChange={(e) => handleUpdateShift(entry.id, 'nightShiftPerson', e.target.value)}
+                                                            >
+                                                                {allEligibleShiftWorkers.map(s => <option key={s} value={s}>{s}</option>)}
+                                                            </select>
+                                                            {entry.extraNightPersons && entry.extraNightPersons.map((extra, idx) => (
+                                                                <div key={idx} className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5 text-[10px]">
+                                                                    <span className="font-bold text-indigo-900 truncate">{extra} ({idx === 0 ? 'نفر ۲' : 'نفر ۳'})</span>
+                                                                    <button
+                                                                        onClick={() => handleRemoveExtraPerson(entry.id, 'Night', extra)}
+                                                                        className="text-red-500 hover:text-red-700 ml-1"
+                                                                        title="حذف"
+                                                                    >
+                                                                        ×
+                                                                    </button>
+                                                                </div>
+                                                            ))}
+                                                        </div>
                                                     </td>
                                                     <td className="p-1">
                                                         <select 
@@ -1767,6 +2168,7 @@ const App: React.FC = () => {
                 <DataManagement 
                     currentData={{ schedule, personnel: personnelList, lockedMonths: unlockedMonths, publishedRange }} 
                     onImport={handleImport}
+                    onStagePreview={handleStagePreview}
                     onReset={handleReset}
                 />
 

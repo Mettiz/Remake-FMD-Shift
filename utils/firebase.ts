@@ -5,6 +5,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 import { 
   getFirestore,
+  initializeFirestore,
   doc, 
   onSnapshot, 
   setDoc, 
@@ -74,35 +75,33 @@ export interface CloudRosterState {
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth: Auth = getAuth(app);
 
-const isBrowser = typeof window !== 'undefined';
+// Initialize Firestore with explicit database ID from config
+export const db: Firestore = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
-// Standard initialization conforming to Firebase Skill guidelines
-export const db: Firestore = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(app);
+/**
+ * Validate initial connection to Firestore backend per skill instructions
+ */
+export async function testConnection(): Promise<boolean> {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn("Firestore running in offline/cached mode.");
+    }
+    return false;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  testConnection().catch(() => {});
+}
 
 const ROSTER_DOC_PATH = 'roster_state';
 const ROSTER_DOC_ID = 'current';
 
-// Non-blocking connection validation conforming to Firebase Skill guidelines
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore offline notice: The client will operate with local cache until connection is established.');
-    }
-  }
-}
-
-if (isBrowser) {
-  testConnection();
-}
-
-/**
- * Subscribes to real-time changes of the roster in Firestore.
- * Automatically synchronizes with local cache while offline and updates when online.
- */
+// Subscribes to real-time changes of the roster in Firestore.
+// Automatically synchronizes with local cache while offline and updates when online.
 export function subscribeToCloudRoster(
   onUpdate: (data: CloudRosterState) => void,
   onInitialEmpty?: () => void,

@@ -11,9 +11,19 @@ interface ShiftUserCardProps {
   className?: string;
   originalName?: string; // New prop to show previous owner
   showIcon?: boolean; // New prop to show icon instead of initial
+  badgeLabel?: string; // Optional tag e.g. "همیار" or "نفر دوم"
+  size?: 'sm' | 'md';
 }
 
-export const ShiftUserCard: React.FC<ShiftUserCardProps> = ({ name, type, className = '', originalName, showIcon = false }) => {
+export const ShiftUserCard: React.FC<ShiftUserCardProps> = ({ 
+  name, 
+  type, 
+  className = '', 
+  originalName, 
+  showIcon = false,
+  badgeLabel,
+  size = 'md'
+}) => {
   const isDay = type === 'Day';
   const isNight = type === 'Night';
   const isSupervisor = type === 'Supervisor';
@@ -60,29 +70,37 @@ export const ShiftUserCard: React.FC<ShiftUserCardProps> = ({ name, type, classN
   
   // Icon Selection
   const Icon = isDay ? Sun : (isNight ? Moon : CheckCircle2);
+  const isCompact = size === 'sm';
 
   return (
     <div className={`
-      relative flex items-center gap-3 px-4 py-3 w-full h-full transition-colors duration-200
+      relative flex items-center ${isCompact ? 'gap-2 px-3 py-1.5' : 'gap-3 px-4 py-3'} w-full transition-all duration-200
       ${styles.wrapper} rounded-lg cursor-default ${className}
     `}>
       
       {/* Colored Indicator Strip (Right side) */}
-      <div className={`absolute right-0 top-2 bottom-2 w-1 rounded-l-full ${styles.indicator} opacity-50`}></div>
+      <div className={`absolute right-0 top-1.5 bottom-1.5 w-1 rounded-l-full ${styles.indicator} opacity-50`}></div>
 
       {/* Avatar or Icon */}
       <div className={`
-        w-9 h-9 min-w-[36px] rounded-full flex items-center justify-center 
-        text-sm font-bold ml-1 ${styles.avatar}
+        ${isCompact ? 'w-7 h-7 min-w-[28px] text-xs' : 'w-9 h-9 min-w-[36px] text-sm'} rounded-full flex items-center justify-center 
+        font-bold ml-1 ${styles.avatar}
       `}>
-        {showIcon ? <Icon size={18} /> : firstLetter}
+        {showIcon ? <Icon size={isCompact ? 14 : 18} /> : firstLetter}
       </div>
 
       {/* Details */}
-      <div className="flex flex-col items-start z-10 min-w-0">
-        <span className="text-sm font-bold tracking-tight truncate w-full text-right">
-          {displayName}
-        </span>
+      <div className="flex flex-col items-start z-10 min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 flex-wrap w-full">
+          <span className={`${isCompact ? 'text-xs' : 'text-sm'} font-bold tracking-tight truncate text-right`}>
+            {displayName}
+          </span>
+          {badgeLabel && (
+            <span className="text-[9px] font-black bg-white/90 text-slate-700 px-1.5 py-0.2 rounded-full border border-slate-200 shadow-2xs whitespace-nowrap">
+              {badgeLabel}
+            </span>
+          )}
+        </div>
         
         {/* If swapped, show original name crossed out */}
         {displayOriginal && displayOriginal !== displayName && (

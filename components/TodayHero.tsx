@@ -98,14 +98,64 @@ export const TodayHero: React.FC<TodayHeroProps> = ({ schedule, onNavigateToToda
                
                {/* Day Shift */}
                <div className="flex flex-col gap-1 items-stretch">
-                 <span className="text-xs font-bold text-slate-400 pr-1 text-right">شیفت روز (۰۸ - ۱۹)</span>
-                 <ShiftUserCard name={todayEntry.dayShiftPerson} type="Day" showIcon={true} />
+                 <div className="flex items-center justify-between pr-1">
+                   <span className="text-xs font-bold text-slate-400 text-right">شیفت روز (۰۸ - ۱۹)</span>
+                   {todayEntry.extraDayPersons && todayEntry.extraDayPersons.length > 0 && (
+                     <span className="text-[10px] font-black text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full">
+                       {todayEntry.extraDayPersons.length + 1} نفره
+                     </span>
+                   )}
+                 </div>
+                 <div className="flex flex-col gap-1.5">
+                   <ShiftUserCard 
+                     name={todayEntry.dayShiftPerson} 
+                     type="Day" 
+                     showIcon={true} 
+                     badgeLabel={todayEntry.extraDayPersons && todayEntry.extraDayPersons.length > 0 ? 'نفر اصلی' : undefined}
+                   />
+                   {todayEntry.extraDayPersons && todayEntry.extraDayPersons.map((extraPerson, extraIdx) => (
+                     <ShiftUserCard 
+                       key={`today-extra-day-${extraIdx}`}
+                       name={extraPerson} 
+                       type="Day" 
+                       size="sm"
+                       showIcon={true}
+                       badgeLabel={extraIdx === 0 ? 'نفر دوم' : 'نفر سوم'}
+                       className="border border-dashed border-orange-300 bg-orange-50/70"
+                     />
+                   ))}
+                 </div>
                </div>
 
                {/* Night Shift */}
                <div className="flex flex-col gap-1 items-stretch">
-                 <span className="text-xs font-bold text-slate-400 pr-1 text-right">شیفت شب (۱۹ - ۰۸)</span>
-                 <ShiftUserCard name={todayEntry.nightShiftPerson} type="Night" showIcon={true} />
+                 <div className="flex items-center justify-between pr-1">
+                   <span className="text-xs font-bold text-slate-400 text-right">شیفت شب (۱۹ - ۰۸)</span>
+                   {todayEntry.extraNightPersons && todayEntry.extraNightPersons.length > 0 && (
+                     <span className="text-[10px] font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                       {todayEntry.extraNightPersons.length + 1} نفره
+                     </span>
+                   )}
+                 </div>
+                 <div className="flex flex-col gap-1.5">
+                   <ShiftUserCard 
+                     name={todayEntry.nightShiftPerson} 
+                     type="Night" 
+                     showIcon={true} 
+                     badgeLabel={todayEntry.extraNightPersons && todayEntry.extraNightPersons.length > 0 ? 'نفر اصلی' : undefined}
+                   />
+                   {todayEntry.extraNightPersons && todayEntry.extraNightPersons.map((extraPerson, extraIdx) => (
+                     <ShiftUserCard 
+                       key={`today-extra-night-${extraIdx}`}
+                       name={extraPerson} 
+                       type="Night" 
+                       size="sm"
+                       showIcon={true}
+                       badgeLabel={extraIdx === 0 ? 'نفر دوم' : 'نفر سوم'}
+                       className="border border-dashed border-slate-300 bg-slate-100/80"
+                     />
+                   ))}
+                 </div>
                </div>
              </div>
            ) : (

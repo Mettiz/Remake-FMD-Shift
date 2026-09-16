@@ -166,8 +166,8 @@ export const PersonalReportModal: React.FC<PersonalReportModalProps> = ({
       const isHolidayOTDay = isFriday || isOfficialHoliday;
       const isNormalWorkDay = !isHolidayOTDay && !isThursday;
 
-      const isDayShift = entry.dayShiftPerson === selectedUser; 
-      const isNightShift = entry.nightShiftPerson === selectedUser; 
+      const isDayShift = entry.dayShiftPerson === selectedUser || (entry.extraDayPersons && entry.extraDayPersons.includes(selectedUser)); 
+      const isNightShift = entry.nightShiftPerson === selectedUser || (entry.extraNightPersons && entry.extraNightPersons.includes(selectedUser)); 
       
       const fullIndex = fullSchedule.findIndex(s => s.id === entry.id);
       let prevEntry: ShiftEntry | undefined;
@@ -177,7 +177,7 @@ export const PersonalReportModal: React.FC<PersonalReportModalProps> = ({
           const dateIdx = fullSchedule.findIndex(s => s.date === entry.date);
           if (dateIdx !== -1 && dateIdx > 0) prevEntry = fullSchedule[dateIdx - 1];
       }
-      const wasNightYesterday = prevEntry?.nightShiftPerson === selectedUser; 
+      const wasNightYesterday = prevEntry ? (prevEntry.nightShiftPerson === selectedUser || (prevEntry.extraNightPersons && prevEntry.extraNightPersons.includes(selectedUser))) : false; 
 
       let dayMowazafi = 0;
       let dayNightFloat = 0;
